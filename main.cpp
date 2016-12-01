@@ -11,7 +11,7 @@
 #include <stdlib.h>
 //#define _OPENMP
 //#ifdef _OPENMP
-#include <omp.h>
+//#include <omp.h>
 //#endif
 
 using namespace std;
@@ -94,7 +94,7 @@ struct GridParameters {
 		recv_message_top (NULL), recv_message_bottom (NULL), recv_message_left (NULL), recv_message_right (NULL),
 		send_requests (NULL), recv_requests (NULL),
 		N1 (N1), N2 (N2),p1 (p1), p2 (p2), eps (eps), 
-		x_index_from (0.0), x_index_to (0.0), y_index_from (0.0), y_index_to (0.0),
+		x_index_from (0), x_index_to (0), y_index_from (0), y_index_to (0),
 		top (false), bottom (false), left (false), right (false) {
 			int step1, step2;
 			step1 = int(floor(1.0 * N1 / p1));
@@ -595,7 +595,7 @@ int main (int argc, char** argv) {
 	if (rank < p1 * p2) {
 		if (rank == 0) {
 	        //ifdef _OPENMP
-	        std::cout << "OpenMP Max-threads = " << omp_get_max_threads() << std::endl;
+	        //std::cout << "OpenMP Max-threads = " << omp_get_max_threads() << std::endl;
 	        //#endif
 			std::cout << "p1=" << p1 << " p2=" << p2 << std::endl;
 	    }

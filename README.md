@@ -16,3 +16,15 @@
  - sbatch -p test -n 128 ompi ./main 1000 1000
  - squeue | grep elena (check task execution)
 
+# compile on bluegene (mpi)
+ - scp -r ~/superprac/poisson-equation/ edu-cmc-stud16-618-08@bluegene1.hpc.cs.msu.ru:~/
+ - ssh edu-cmc-stud16-618-08@bluegene1.hpc.cs.msu.ru
+ 
+
+ - ssh elena777mc_1854@lomonosov.parallel.ru
+ - ssh compiler
+ - module add openmpi/1.8.4-gcc 
+ - git clone https://github.com/elena777mc/poisson-equation.git
+ - cd poisson-equation
+ - make
+ - cp main ~/_scratch
