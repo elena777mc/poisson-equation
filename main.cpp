@@ -7,6 +7,7 @@
 #include <sstream>
 #include <fstream>
 #include <cstdlib>
+#include <ctime>
 #include <stdlib.h>
 //#define _OPENMP
 //#ifdef _OPENMP
@@ -557,7 +558,8 @@ void write_two_func_to_file(GridParameters gp, double *func1, string func1_name,
 int main (int argc, char** argv) {
 	if (argc != 3)
 		throw std::runtime_error("Incorrect number of arguments");
-	
+	clock_t begin = clock();
+
 	const double A1 = 0.0;
 	const double A2 = 3.0;
 	const double B1 = 0.0;
@@ -682,5 +684,11 @@ int main (int argc, char** argv) {
 	}
 
 	MPI_Finalize();
+
+	if (rank == 0) {
+		clock_t end = clock();
+	  	double elapsed_secs = double(end - begin) / CLOCKS_PER_SEC;
+	  	printf("Algorithm finished! Elapsed time: %f sec\n", elapsed_secs);
+	}
 	return 0;
 }
