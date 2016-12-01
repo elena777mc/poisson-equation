@@ -4,6 +4,7 @@
  - ssh elena777mc_1854@lomonosov.parallel.ru
  - ssh compiler
  - module add openmpi/1.8.4-gcc 
+ - git clone https://github.com/elena777mc/poisson-equation.git
  - cd poisson-equation
  - make
  - cp main ~/_scratch
