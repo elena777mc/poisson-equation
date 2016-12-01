@@ -13,6 +13,6 @@
  - ssh elena777mc_1854@lomonosov.parallel.ru
  - module add slurm/2.5.6 
  - module add openmpi/1.8.4-gcc 
- - sbatch -p test -n 128 ompi ./main
+ - sbatch -p test -n 128 ompi ./main 1000 1000
  - squeue | grep elena (check task execution)
 

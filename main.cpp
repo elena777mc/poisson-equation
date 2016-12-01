@@ -6,6 +6,7 @@
 #include <string>
 #include <sstream>
 #include <fstream>
+#include <cstdlib>
 #include <stdlib.h>
 //#define _OPENMP
 //#ifdef _OPENMP
@@ -70,7 +71,7 @@ void compute_grid_processes_number(const int& size, int& x_proc_num, int& y_proc
         x_proc_num = 1;
         y_proc_num = 1;
     } else {
-        throw std::runtime_error("Incorrent processes number");
+        throw std::runtime_error("Incorrect processes number");
     }
 }
 
@@ -554,13 +555,16 @@ void write_two_func_to_file(GridParameters gp, double *func1, string func1_name,
 // srun -p test -n 4 impi ./main
 // !!! sbatch -p test -n 16  impi ./main
 int main (int argc, char** argv) {
+	if (argc != 3)
+		throw std::runtime_error("Incorrect number of arguments");
+	
 	const double A1 = 0.0;
 	const double A2 = 3.0;
 	const double B1 = 0.0;
 	const double B2 = 3.0;
 
-	const int N1 = 100;
-	const int N2 = 100;
+	const int N1 = atoi(argv[1]);
+	const int N2 = atoi(argv[2]);
 	const double eps = 0.0001;
 
 	double* x_grid = new double [N1+1];
