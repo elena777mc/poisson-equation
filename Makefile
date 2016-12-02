@@ -15,6 +15,10 @@ all: $(APP)
 $(APP): $(OBJS)
 	$(CC) $(INCLUDE_DIR)  $(LDFLAGS) $(OBJS) -o $(APP) $(LIBS)
 
+bluegene-openmp: 
+	mpixlcxx_r $(CFLAGS) -qsmp=omp main.cpp -o main.o
+	mpixlcxx_r $(INCLUDE_DIR)  $(LDFLAGS) $(OBJS) -o $(APP) -O3 -qsmp=omp
+
 %.o: %.cpp $(HDRS) $(MF)
 	$(CC) $(INCLUDE_DIR)  $(CFLAGS) $< -o $@
 
