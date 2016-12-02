@@ -35,6 +35,7 @@
  - llmap (check task execution)
 
 # run locally
+ - git clone https://github.com/elena777mc/poisson-equation.git
  - cd poisson-equation
  - make
  - mpirun -np 16 ./main 1000 1000
