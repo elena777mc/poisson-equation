@@ -571,20 +571,7 @@ void write_two_func_to_file(GridParameters gp, double *func1, string func1_name,
 	}
 }
 
-// scp -r  ~/Documents/courses/superprac elena777mc_1854@lomonosov.parallel.ru:~/
 
-// ssh elena777mc_1854@lomonosov.parallel.ru
-// ssh compiler
-// module add openmpi/1.8.4-gcc 
-// make
-// mpirun -np 4 ./main
-// srun -p test -n 32 ompi main
-// srun -p test -n32 --ntasks-per-node 2 ompi main
-// module add impi/5.0.1
-// srun -p test -n 4 impi ./main
-// !!! sbatch -p test -n 16  impi ./main
-
-// mpisubmit.bg -n 32 -w 00:02:00 -m smp -t PREFER_TORUS ./main 1000 1000
 int main (int argc, char** argv) {
 	if (argc != 3)
 		throw std::runtime_error("Incorrect number of arguments");
