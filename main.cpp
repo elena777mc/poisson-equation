@@ -9,10 +9,10 @@
 #include <cstdlib>
 #include <ctime>
 #include <stdlib.h>
-//#define _OPENMP
-//#ifdef _OPENMP
-//#include <omp.h>
-//#endif
+#define _OPENMP
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 using namespace std;
 
@@ -44,7 +44,10 @@ double f_grid(const double t) {
 }
 
 void compute_grid_processes_number(const int& size, int& x_proc_num, int& y_proc_num) {
-    if (size >= 256) {
+    if (size >= 512) {
+        x_proc_num = 16;
+        y_proc_num = 32;
+    } else if (size >= 256) {
         x_proc_num = 16;
         y_proc_num = 16;
     } else if (size >= 128) {
@@ -183,6 +186,8 @@ struct GridParameters {
 
 double scalar_product(GridParameters gp, const double* f1, const double* f2) {
 	double product = 0.0;
+
+	#pragma omp parallel for reduction(+:product)
 	for (int i=0; i<gp.get_num_x_points(); i++){
         for (int j=0; j<gp.get_num_y_points(); j++){
         	int grid_i, grid_j;
@@ -222,6 +227,8 @@ enum MPI_tags { SendToTop, SendToBottom, SendToLeft, SendToRight};
 
 void compute_approx_delta(GridParameters gp, double* delta_func, const double* func) {
 	// compute inner points
+
+	#pragma omp parallel for private(j)
 	for (int i=1; i<gp.get_num_x_points()-1; i++) {
     	for (int j=1; j<gp.get_num_y_points()-1; j++) {
     		int grid_i, grid_j;
@@ -390,6 +397,7 @@ void compute_approx_delta(GridParameters gp, double* delta_func, const double* f
 }
 
 void compute_r(GridParameters gp, double *r, const double *delta_p) {
+	#pragma omp parallel for private(j)
 	for (int i=0; i<gp.get_num_x_points(); i++) {
     	for (int j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -403,6 +411,7 @@ void compute_r(GridParameters gp, double *r, const double *delta_p) {
 }
 
 void compute_g(GridParameters gp, double *g, double *r, double alpha) {
+	#pragma omp parallel for private(j)
 	for (int i=0; i<gp.get_num_x_points(); i++) {
     	for (int j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -413,6 +422,7 @@ void compute_g(GridParameters gp, double *g, double *r, double alpha) {
 }
 
 void compute_p(GridParameters gp, double *p, double* p_prev, double *g, double tau) {
+	#pragma omp parallel for private(j)
 	for (int i=0; i<gp.get_num_x_points(); i++) {
     	for (int j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -441,6 +451,7 @@ double compute_norm(GridParameters gp, double *p, double *p_prev) {
 }
 
 void init_vector(GridParameters gp, double* func) {
+	#pragma omp parallel for private(j)
 	for (int i=0; i<gp.get_num_x_points(); i++) {
     	for (int j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -472,6 +483,7 @@ void init_vector(GridParameters gp, double* func) {
 }
 
 void init_p_and_p_prev(GridParameters gp, double* p, double* p_prev) {
+	#pragma omp parallel for private(j)
 	for (int i=0; i<gp.get_num_x_points(); i++) {
     	for (int j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -596,9 +608,10 @@ int main (int argc, char** argv) {
 	// filter extra processes
 	if (rank < p1 * p2) {
 		if (rank == 0) {
-	        //ifdef _OPENMP
-	        //std::cout << "OpenMP Max-threads = " << omp_get_max_threads() << std::endl;
-	        //#endif
+	       	//#ifdef _OPENMP
+	       	#ifdef _OPENMP
+	        std::cout << "OpenMP Max-threads = " << omp_get_max_threads() << std::endl;
+	        #endif
 			std::cout << "p1=" << p1 << " p2=" << p2 << std::endl;
 	    }
 		//printf( "Hello world from process %d of %d\n", rank, size );
@@ -678,13 +691,10 @@ int main (int argc, char** argv) {
             swap(p, p_prev);
 	    	n_iter += 1;
 	    }
-
-	    write_two_func_to_file(gp, p, "p", phi_on_grid, "phi_on_grid");
+	    //write_two_func_to_file(gp, p, "p", phi_on_grid, "phi_on_grid");
     	//write_func_to_file(gp, p, "p");
     	//write_func_to_file(gp, phi_on_grid, "phi_on_grid");
-
 	}
-
 	MPI_Finalize();
 
 	if (rank == 0) {
