@@ -562,11 +562,13 @@ void write_func_to_file(GridParameters gp, double *func, string func_name) {
 void write_two_func_to_file(GridParameters gp, double *func1, string func1_name, double *func2, string func2_name) {
 	std::string name= "output/"+ func1_name + "_" + from_int(gp.rank) + ".txt"; 
 	std::fstream fout (name.c_str(), fstream::out);
+
+	fout << "x,y," << func1_name << "," << func2_name << endl;
 	for (int i=0; i<gp.get_num_x_points(); i++) {
     	for (int j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
     		gp.get_real_grid_index(i, j, grid_i, grid_j);
-    		fout << func1_name << "[" << grid_i <<"][" << grid_j <<"]=" << func1[i*gp.get_num_y_points()+j] << " " << func2_name << "[" << grid_i <<"][" << grid_j <<"]=" << func2[i*gp.get_num_y_points()+j] << " x=" << gp.get_x_grid_value(grid_i) << " y=" << gp.get_y_grid_value(grid_j) << endl;
+    		fout << gp.get_x_grid_value(grid_i) << "," << gp.get_y_grid_value(grid_j) << "," << func1[i*gp.get_num_y_points()+j] << "," << func2[i*gp.get_num_y_points()+j] << endl;
     	}
 	}
 }
