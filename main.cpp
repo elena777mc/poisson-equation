@@ -227,7 +227,7 @@ enum MPI_tags { SendToTop, SendToBottom, SendToLeft, SendToRight};
 void compute_approx_delta(GridParameters gp, double* delta_func, const double* func) {
 	// compute inner points
 	int i, j;
-	#pragma omp parallel for private(j)
+	#pragma omp parallel for collapse(2)
 	for (i=1; i<gp.get_num_x_points()-1; i++) {
     	for (j=1; j<gp.get_num_y_points()-1; j++) {
     		int grid_i, grid_j;
@@ -396,7 +396,7 @@ void compute_approx_delta(GridParameters gp, double* delta_func, const double* f
 void compute_r(GridParameters gp, double *r, const double *delta_p) {
 	int i, j;
 
-	#pragma omp parallel for private(j)
+	#pragma omp parallel for collapse(2)
 	for (i=0; i<gp.get_num_x_points(); i++) {
     	for (j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -412,7 +412,7 @@ void compute_r(GridParameters gp, double *r, const double *delta_p) {
 void compute_g(GridParameters gp, double *g, double *r, double alpha) {
 	int i, j;
 
-	#pragma omp parallel for private(j)
+	#pragma omp parallel for collapse(2)
 	for (i=0; i<gp.get_num_x_points(); i++) {
     	for (j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -425,7 +425,7 @@ void compute_g(GridParameters gp, double *g, double *r, double alpha) {
 void compute_p(GridParameters gp, double *p, double* p_prev, double *g, double tau) {
 	int i, j;
 
-	#pragma omp parallel for private(j)
+	#pragma omp parallel for collapse(2)
 	for (i=0; i<gp.get_num_x_points(); i++) {
     	for (j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -465,7 +465,7 @@ double compute_norm(GridParameters gp, double *p, double *p_prev) {
 void init_vector(GridParameters gp, double* func) {
 	int i, j;
 
-	#pragma omp parallel for private(j)
+	#pragma omp parallel for collapse(2)
 	for (i=0; i<gp.get_num_x_points(); i++) {
     	for (j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -473,76 +473,22 @@ void init_vector(GridParameters gp, double* func) {
     		func[i*gp.get_num_y_points()+j] = 0.0;
 		}
 	}
-
-	if (gp.top) {
-		int i = 0;
-		for (int j=0; j<gp.get_num_y_points(); j++)
-			func[i*gp.get_num_y_points()+j] = 0.0;
-	}
-	if (gp.bottom) {
-		int i = gp.get_num_x_points()-1;
-		for (int j=0; j<gp.get_num_y_points(); j++)
-			func[i*gp.get_num_y_points()+j] = 0.0;
-	}
-	if (gp.left) {
-		int j = 0;
-		for (int i=0; i<gp.get_num_x_points(); i++)
-			func[i*gp.get_num_y_points()+j] = 0.0;
-	}
-	if (gp.right) {
-		int j = gp.get_num_y_points()-1;
-		for (int i=0; i<gp.get_num_x_points(); i++)
-			func[i*gp.get_num_y_points()+j] = 0.0;
-	}
 }
 
-void init_p_and_p_prev(GridParameters gp, double* p, double* p_prev) {
+void init_p_prev(GridParameters gp, double* p_prev) {
 	int i, j;
 
-	#pragma omp parallel for private(j)
+	#pragma omp parallel for collapse(2)
 	for (i=0; i<gp.get_num_x_points(); i++) {
     	for (j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
     		gp.get_real_grid_index(i, j, grid_i, grid_j);
-    		p_prev[i*gp.get_num_y_points()+j] = 0.0;
-    		p[i*gp.get_num_y_points()+j] = 0.0;
-		}
-	}
-
-	if (gp.top) {
-		int i = 0;
-		for (int j=0; j<gp.get_num_y_points(); j++) {
-			int grid_i, grid_j;
-    		gp.get_real_grid_index(i, j, grid_i, grid_j);
-			p_prev[i*gp.get_num_y_points()+j] = phi(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
-			p[i*gp.get_num_y_points()+j] = phi(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
-		}
-	}
-	if (gp.bottom) {
-		int i = gp.get_num_x_points()-1;
-		for (int j=0; j<gp.get_num_y_points(); j++) {
-			int grid_i, grid_j;
-    		gp.get_real_grid_index(i, j, grid_i, grid_j);
-			p_prev[i*gp.get_num_y_points()+j] = phi(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
-			p[i*gp.get_num_y_points()+j] = phi(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
-		}
-	}
-	if (gp.left) {
-		int j = 0;
-		for (int i=0; i<gp.get_num_x_points(); i++) {
-			int grid_i, grid_j;
-    		gp.get_real_grid_index(i, j, grid_i, grid_j);
-			p_prev[i*gp.get_num_y_points()+j] = phi(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
-			p[i*gp.get_num_y_points()+j] = phi(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
-		}
-	}
-	if (gp.right) {
-		int j = gp.get_num_y_points()-1;
-		for (int i=0; i<gp.get_num_x_points(); i++) {
-			int grid_i, grid_j;
-    		gp.get_real_grid_index(i, j, grid_i, grid_j);
-			p_prev[i*gp.get_num_y_points()+j] = phi(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
-			p[i*gp.get_num_y_points()+j] = phi(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
+    		if (not gp.is_border_point(grid_i, grid_j)) {
+                p_prev[i*gp.get_num_y_points()+j] = 0.0;
+            }
+            else {
+                p_prev[i*gp.get_num_y_points()+j] = phi(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
+            }
 		}
 	}
 }
@@ -635,7 +581,7 @@ int main (int argc, char** argv) {
 	    double* delta_r = new double [gp.get_num_x_points() * gp.get_num_y_points()];
 	    double* delta_g = new double [gp.get_num_x_points() * gp.get_num_y_points()];
 	    
-	    init_p_and_p_prev(gp, p, p_prev);
+	    init_p_prev(gp, p_prev);
 
 	    init_vector(gp, r);
 	    init_vector(gp, g);
