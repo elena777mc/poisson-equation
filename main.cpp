@@ -9,9 +9,6 @@
 #include <cstdlib>
 #include <ctime>
 #include <stdlib.h>
-#ifdef _OPENMP
-#include <omp.h>
-#endif
 
 using namespace std;
 
@@ -186,7 +183,6 @@ struct GridParameters {
 double scalar_product(GridParameters gp, const double* f1, const double* f2) {
 	double product = 0.0;
 
-	#pragma omp parallel for reduction(+:product)
 	for (int i=0; i<gp.get_num_x_points(); i++){
         for (int j=0; j<gp.get_num_y_points(); j++){
         	int grid_i, grid_j;
@@ -227,7 +223,6 @@ enum MPI_tags { SendToTop, SendToBottom, SendToLeft, SendToRight};
 void compute_approx_delta(GridParameters gp, double* delta_func, const double* func) {
 	// compute inner points
 	int i, j;
-	#pragma omp parallel for 
 	for (i=1; i<gp.get_num_x_points()-1; i++) {
     	for (j=1; j<gp.get_num_y_points()-1; j++) {
     		int grid_i, grid_j;
@@ -396,7 +391,6 @@ void compute_approx_delta(GridParameters gp, double* delta_func, const double* f
 void compute_r(GridParameters gp, double *r, const double *delta_p) {
 	int i, j;
 
-	#pragma omp parallel for 
 	for (i=0; i<gp.get_num_x_points(); i++) {
     	for (j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -412,7 +406,6 @@ void compute_r(GridParameters gp, double *r, const double *delta_p) {
 void compute_g(GridParameters gp, double *g, double *r, double alpha) {
 	int i, j;
 
-	#pragma omp parallel for 
 	for (i=0; i<gp.get_num_x_points(); i++) {
     	for (j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -425,7 +418,6 @@ void compute_g(GridParameters gp, double *g, double *r, double alpha) {
 void compute_p(GridParameters gp, double *p, double* p_prev, double *g, double tau) {
 	int i, j;
 
-	#pragma omp parallel for 
 	for (i=0; i<gp.get_num_x_points(); i++) {
     	for (j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -437,26 +429,18 @@ void compute_p(GridParameters gp, double *p, double* p_prev, double *g, double t
 
 double compute_norm(GridParameters gp, double *p, double *p_prev) {
 	double norm = 0.0;
-	double norm_shared = 0.0;
 
 	int i, j;
-	#pragma omp parallel shared(norm_shared) firstprivate(norm) 
-	{
-		for (i=0; i<gp.get_num_x_points(); i++) {
-	    	for (j=0; j<gp.get_num_y_points(); j++) {
-	    		int grid_i, grid_j;
-	    		gp.get_real_grid_index(i, j, grid_i, grid_j);
-	    		norm = max(norm, abs(p[i*gp.get_num_y_points()+j] - p_prev[i*gp.get_num_y_points()+j]));
-	    	}
-		}
-		#pragma omp critical 
-	  	{
-	      if(norm > norm_shared) norm_shared = norm;
-		}
+	for (i=0; i<gp.get_num_x_points(); i++) {
+    	for (j=0; j<gp.get_num_y_points(); j++) {
+    		int grid_i, grid_j;
+    		gp.get_real_grid_index(i, j, grid_i, grid_j);
+    		norm = max(norm, abs(p[i*gp.get_num_y_points()+j] - p_prev[i*gp.get_num_y_points()+j]));
+    	}
 	}
 
 	double global_norm = 0.0;
-	int status = MPI_Allreduce(&norm_shared, &global_norm, 1, MPI_DOUBLE, MPI_MAX, gp.comm);
+	int status = MPI_Allreduce(&norm, &global_norm, 1, MPI_DOUBLE, MPI_MAX, gp.comm);
     if (status != MPI_SUCCESS) throw std::runtime_error("Error in compute scalar_product!");
     //printf("rank %d: norm=%f global_norm=%f\n", gp.rank, norm, global_norm);
     return global_norm;
@@ -465,7 +449,6 @@ double compute_norm(GridParameters gp, double *p, double *p_prev) {
 void init_vector(GridParameters gp, double* func) {
 	int i, j;
 
-	#pragma omp parallel for 
 	for (i=0; i<gp.get_num_x_points(); i++) {
     	for (j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -478,7 +461,6 @@ void init_vector(GridParameters gp, double* func) {
 void init_p_prev(GridParameters gp, double* p_prev) {
 	int i, j;
 
-	#pragma omp parallel for 
 	for (i=0; i<gp.get_num_x_points(); i++) {
     	for (j=0; j<gp.get_num_y_points(); j++) {
     		int grid_i, grid_j;
@@ -490,32 +472,6 @@ void init_p_prev(GridParameters gp, double* p_prev) {
                 p_prev[i*gp.get_num_y_points()+j] = phi(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
             }
 		}
-	}
-}
-
-void write_func_to_file(GridParameters gp, double *func, string func_name) {
-	std::string name= "output/"+func_name + "_" + from_int(gp.rank) + ".txt"; 
-	std::fstream fout (name.c_str(), fstream::out);
-	for (int i=0; i<gp.get_num_x_points(); i++) {
-    	for (int j=0; j<gp.get_num_y_points(); j++) {
-    		int grid_i, grid_j;
-    		gp.get_real_grid_index(i, j, grid_i, grid_j);
-    		fout << func_name << "[" << grid_i <<"][" << grid_j <<"]=" << func[i*gp.get_num_y_points()+j] << " x=" << gp.get_x_grid_value(grid_i) << " y=" << gp.get_y_grid_value(grid_j) << endl;
-    	}
-	}
-}
-
-void write_two_func_to_file(GridParameters gp, double *func1, string func1_name, double *func2, string func2_name) {
-	std::string name= "output/"+ func1_name + "_" + from_int(gp.rank) + ".txt"; 
-	std::fstream fout (name.c_str(), fstream::out);
-
-	fout << "x,y," << func1_name << "," << func2_name << endl;
-	for (int i=0; i<gp.get_num_x_points(); i++) {
-    	for (int j=0; j<gp.get_num_y_points(); j++) {
-    		int grid_i, grid_j;
-    		gp.get_real_grid_index(i, j, grid_i, grid_j);
-    		fout << gp.get_x_grid_value(grid_i) << "," << gp.get_y_grid_value(grid_j) << "," << func1[i*gp.get_num_y_points()+j] << "," << func2[i*gp.get_num_y_points()+j] << endl;
-    	}
 	}
 }
 
@@ -559,10 +515,6 @@ int main (int argc, char** argv) {
 	// filter extra processes
 	if (rank < p1 * p2) {
 		if (rank == 0) {
-	       	//#ifdef _OPENMP
-	       	#ifdef _OPENMP
-	        std::cout << "OpenMP Max-threads = " << omp_get_max_threads() << std::endl;
-	        #endif
 			std::cout << "p1=" << p1 << " p2=" << p2 << " size=" << size << std::endl;
 	    }
 		//printf( "Hello world from process %d of %d\n", rank, size );
