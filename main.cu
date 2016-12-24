@@ -9,8 +9,22 @@
 #include <cstdlib>
 #include <ctime>
 #include <stdlib.h>
+#include <cuda_runtime.h>
+
+#include <sstream>
+#include <string>
 
 using namespace std;
+
+#define SAFE_CUDA(err)\
+    if (err != cudaSuccess){ \
+        throw std::runtime_error(cudaGetErrorString(err)); \
+    }
+
+#define CUDA_CHECK_ERROR\
+    if (cudaPeekAtLastError() != cudaSuccess){ \
+        throw std::runtime_error(cudaGetErrorString(cudaGetLastError())); \
+    }
 
 string from_int(int number) {
 	stringstream ss;
@@ -80,6 +94,7 @@ struct GridParameters {
 	double *x_grid, *y_grid;
 	double eps;
     bool top, bottom, left, right;
+    double *hxhy;
 
     double *send_message_top, *send_message_bottom, *send_message_left, *send_message_right;
     double *recv_message_top, *recv_message_bottom, *recv_message_left, *recv_message_right;
@@ -119,6 +134,18 @@ struct GridParameters {
 				right = true;
 			if (x_index_to == N1)
 				bottom = true;
+
+			hxhy = new double [get_num_x_points() * get_num_y_points()];
+			for (int i=0; i<get_num_x_points(); i++){
+	        	for (int j=0; j<get_num_y_points(); j++){
+	        		int grid_i, grid_j;
+    				get_real_grid_index(i, j, grid_i, grid_j);
+    				if (not is_border_point(grid_i, grid_j)) 
+	        			hxhy[i*get_num_y_points()+j] = ((get_x_h_step(grid_i) + get_x_h_step(grid_i-1)) / 2.0) * ((get_y_h_step(grid_j) + get_y_h_step(grid_j-1)) / 2.0);
+	        		else
+	        			hxhy[i*get_num_y_points()+j] = 0.0;
+	        	}
+	        }
 		}
 
 	int get_num_x_points() {
@@ -135,7 +162,7 @@ struct GridParameters {
 			return y_index_to - y_index_from;
 	}
 
-	int get_real_grid_index(int i, int j, int& grid_i, int& grid_j) {
+	void get_real_grid_index(int i, int j, int& grid_i, int& grid_j) {
 		grid_i = x_index_from+i;
 		grid_j = y_index_from+j;
 	}
@@ -180,24 +207,75 @@ struct GridParameters {
 	}
 };
 
-double scalar_product(GridParameters gp, const double* f1, const double* f2) {
-	double product = 0.0;
+__global__ void gpu_scalar_product_reduce(const double *f1, double *f2, double *data, double* hxhy, double *product, int numElements) {
+  int j;
+  int no_thread = threadIdx.x + blockDim.x * blockIdx.x;
 
-	for (int i=0; i<gp.get_num_x_points(); i++){
-        for (int j=0; j<gp.get_num_y_points(); j++){
-        	int grid_i, grid_j;
-	    	gp.get_real_grid_index(i, j, grid_i, grid_j);
-        	if (not gp.is_border_point(grid_i, grid_j)) {
-	        	double average_hx = (gp.get_x_h_step(grid_i) + gp.get_x_h_step(grid_i-1)) / 2.0;
-	        	double average_hy = (gp.get_y_h_step(grid_j) + gp.get_y_h_step(grid_j-1)) / 2.0;
-	        	//printf("! average_hx=%f average_hy=%f i=%d j=%d f1[i,j]=%f f2[i,j]=%f\n", average_hx, average_hy, i, j, f1[i*gp.get_num_y_points()+j], f2[i*gp.get_num_y_points()+j]);
-	            product += average_hx * average_hy * f1[i*gp.get_num_y_points()+j] * f2[i*gp.get_num_y_points()+j];
-	        }
-        }
-    }
+  if (no_thread < numElements) {
+    data[no_thread] = hxhy[no_thread] * f1[no_thread] * f2[no_thread];
+  }
+  __syncthreads();
+  if (no_thread == 0) {
+    double sum = 0;
+    for (j = 0; j < numElements; j++)
+        sum += data[j];
+    product[0] = sum;
+  }
+}
+
+double scalar_product(GridParameters gp, const double* f1, const double* f2) {
+	// double product = 0.0;
+
+	// for (int i=0; i<gp.get_num_x_points(); i++){
+ //        for (int j=0; j<gp.get_num_y_points(); j++){
+ //        	int grid_i, grid_j;
+	//     	gp.get_real_grid_index(i, j, grid_i, grid_j);
+ //        	if (not gp.is_border_point(grid_i, grid_j)) {
+	//         	double average_hx = (gp.get_x_h_step(grid_i) + gp.get_x_h_step(grid_i-1)) / 2.0;
+	//         	double average_hy = (gp.get_y_h_step(grid_j) + gp.get_y_h_step(grid_j-1)) / 2.0;
+	//         	if ((gp.rank == 0) && (abs(average_hx * average_hy - gp.hxhy[i*gp.get_num_y_points()+j]) > 0.000001))
+	//         		printf("average_hx*average_hy=%f hxhy=%f\n", average_hx * average_hy, gp.hxhy[i*gp.get_num_y_points()+j]);
+	//         	//printf("! average_hx=%f average_hy=%f i=%d j=%d f1[i,j]=%f f2[i,j]=%f\n", average_hx, average_hy, i, j, f1[i*gp.get_num_y_points()+j], f2[i*gp.get_num_y_points()+j]);
+	//             product += average_hx * average_hy * f1[i*gp.get_num_y_points()+j] * f2[i*gp.get_num_y_points()+j];
+	//         }
+ //        }
+ //    }
+
+
+    //int size = sizeof(f1);
+    int size = gp.get_num_x_points() * gp.get_num_y_points() * sizeof(double);
+    int numElements = gp.get_num_x_points() * gp.get_num_y_points();
+
+    double *d_f1, *d_f2, *d_data, *d_hxhy, *d_product;
+    SAFE_CUDA(cudaMalloc(&d_f1, size));
+    SAFE_CUDA(cudaMalloc(&d_f2, size));
+    SAFE_CUDA(cudaMalloc(&d_data, size));
+    SAFE_CUDA(cudaMalloc(&d_hxhy, size));
+    SAFE_CUDA(cudaMalloc(&d_product, sizeof(double)));
+
+    SAFE_CUDA(cudaMemcpy(d_f1, f1, size, cudaMemcpyHostToDevice));
+    SAFE_CUDA(cudaMemcpy(d_f2, f2, size, cudaMemcpyHostToDevice));
+    SAFE_CUDA(cudaMemcpy(d_hxhy, gp.hxhy, size, cudaMemcpyHostToDevice));
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
+    //printf("rank=%d CUDA kernel launch with %d blocks of %d threads\n", gp.rank, blocksPerGrid, threadsPerBlock);
+    gpu_scalar_product_reduce<<<blocksPerGrid, threadsPerBlock>>>(d_f1, d_f2, d_data, d_hxhy, d_product, numElements); CUDA_CHECK_ERROR;
+
+    //double * gpu_product_ = new double [1];
+    //cudaMemcpy(gpu_product_, d_product, sizeof(double), cudaMemcpyDeviceToHost);
+    //double gpu_product = gpu_product_[0];
+    double gpu_product = 0.0;
+    SAFE_CUDA(cudaMemcpy(&gpu_product, d_product, sizeof(d_product), cudaMemcpyDeviceToHost));
+    //printf("rank=%d size=%d numElements=%d CPU product=%f GPU product=%f\n", gp.rank, size, numElements, product, gpu_product);
+
+    SAFE_CUDA(cudaFree(d_f1));
+    SAFE_CUDA(cudaFree(d_f2));
+    SAFE_CUDA(cudaFree(d_data));
+    SAFE_CUDA(cudaFree(d_hxhy));
+    SAFE_CUDA(cudaFree(d_product));
 
     double global_product = 0.0;
-    int status = MPI_Allreduce(&product, &global_product, 1, MPI_DOUBLE, MPI_SUM, gp.comm);
+    int status = MPI_Allreduce(&gpu_product, &global_product, 1, MPI_DOUBLE, MPI_SUM, gp.comm);
     if (status != MPI_SUCCESS) throw std::runtime_error("Error in compute scalar_product!");
     //printf("rank %d: product=%f global_product=%f\n", gp.rank, product, global_product);
     return global_product;
@@ -476,6 +554,17 @@ void init_p_prev(GridParameters gp, double* p_prev) {
 }
 
 
+// module add slurm/2.5.6 
+// module add openmpi/1.8.4-gcc
+// module add cuda/6.5.14
+// sbatch -p gputest -n 8 --ntasks-per-node=2 --time=00:03:00 ompi ./main 1000 1000
+
+
+// module add cuda/5.5 
+// module add impi/5.0.1
+// sbatch -p gputest -n 8 --time=00:01:00 impi ./main 1000 1000
+// module add cuda/6.5.14
+// sbatch -p gputest -n 8 --time=00:01:00 ompi ./main 1000 1000
 int main (int argc, char** argv) {
 	if (argc != 3)
 		throw std::runtime_error("Incorrect number of arguments");
@@ -504,7 +593,6 @@ int main (int argc, char** argv) {
 
 	int rank, size;
 	int p1, p2;
-	int x_index_from, x_index_to, y_index_from, y_index_to;
 
 	MPI_Init (&argc, &argv);	/* starts MPI */
 	MPI_Comm_rank (MPI_COMM_WORLD, &rank);	/* get current process id */
@@ -517,9 +605,6 @@ int main (int argc, char** argv) {
 		if (rank == 0) {
 			std::cout << "p1=" << p1 << " p2=" << p2 << " size=" << size << std::endl;
 	    }
-		//printf( "Hello world from process %d of %d\n", rank, size );
-	    //printf("rank %d: x_index_from = %d  x_index_to = %d  y_index_from = %d y_index_to = %d  top=%d bottom=%d left=%d right=%d\n", 
-	    // 	rank, x_index_from, x_index_to, y_index_from, y_index_to, );
 
 	    GridParameters gp(rank, MPI_COMM_WORLD, x_grid, y_grid, N1, N2, p1, p2, eps);
 	   	//printf("rank %d: x_index_from = %d  x_index_to = %d  y_index_from = %d y_index_to = %d  top=%d bottom=%d left=%d right=%d\n", 
