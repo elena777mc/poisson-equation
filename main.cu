@@ -285,23 +285,6 @@ __global__ void gpu_reduce_sum(double *input, double *results, int n) {
 
 
 double scalar_product(GridParameters gp, const double* f1, const double* f2) {
-	// double product = 0.0;
-
-	// for (int i=0; i<gp.get_num_x_points(); i++){
- //        for (int j=0; j<gp.get_num_y_points(); j++){
- //        	int grid_i, grid_j;
-	//     	gp.get_real_grid_index(i, j, grid_i, grid_j);
- //        	if (not gp.is_border_point(grid_i, grid_j)) {
-	//         	double average_hx = (gp.get_x_h_step(grid_i) + gp.get_x_h_step(grid_i-1)) / 2.0;
-	//         	double average_hy = (gp.get_y_h_step(grid_j) + gp.get_y_h_step(grid_j-1)) / 2.0;
-	//         	//if ((gp.rank == 0) && (abs(average_hx * average_hy - gp.hxhy[i*gp.get_num_y_points()+j]) > 0.000001))
-	//         	//	printf("average_hx*average_hy=%f hxhy=%f\n", average_hx * average_hy, gp.hxhy[i*gp.get_num_y_points()+j]);
-	//         	//printf("! average_hx=%f average_hy=%f i=%d j=%d f1[i,j]=%f f2[i,j]=%f\n", average_hx, average_hy, i, j, f1[i*gp.get_num_y_points()+j], f2[i*gp.get_num_y_points()+j]);
-	//             product += average_hx * average_hy * f1[i*gp.get_num_y_points()+j] * f2[i*gp.get_num_y_points()+j];
-	//         }
- //        }
- //    }
-
  	int size = gp.get_num_x_points() * gp.get_num_y_points() * sizeof(double);
     int numElements = gp.get_num_x_points() * gp.get_num_y_points();
 
@@ -379,16 +362,7 @@ __global__ void gpu_compute_approx_delta(double *delta_func, double *func, doubl
 enum MPI_tags { SendToTop, SendToBottom, SendToLeft, SendToRight};
 
 void compute_approx_delta(GridParameters gp, double* delta_func, const double* func) {
-	// // compute inner points
 	int i, j;
-	// for (i=1; i<gp.get_num_x_points()-1; i++) {
- //    	for (j=1; j<gp.get_num_y_points()-1; j++) {
- //    		int grid_i, grid_j;
- //    		gp.get_real_grid_index(i, j, grid_i, grid_j);
- //    		compute_delta(gp, func, delta_func, func[(i-1)*gp.get_num_y_points()+j], func[(i+1)*gp.get_num_y_points()+j], func[i*gp.get_num_y_points()+j-1], func[i*gp.get_num_y_points()+j+1], i, j, grid_i, grid_j);
- //    	}
-	// }
-
 
 	int size = gp.get_num_x_points() * gp.get_num_y_points() * sizeof(double);
     int numElements = gp.get_num_x_points() * gp.get_num_y_points();
@@ -410,7 +384,6 @@ void compute_approx_delta(GridParameters gp, double* delta_func, const double* f
     int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
     gpu_compute_approx_delta<<<blocksPerGrid, threadsPerBlock>>>(d_delta_func, d_func, d_gp_x_h_step, d_gp_y_h_step, d_gp_is_not_border, gp.get_num_y_points(), numElements); CUDA_CHECK_ERROR;
 
-    //double *gpu_delta_func = new double [gp.get_num_x_points() * gp.get_num_y_points()];
     SAFE_CUDA(cudaMemcpy(delta_func, d_delta_func, size, cudaMemcpyDeviceToHost));
 
     SAFE_CUDA(cudaFree(d_delta_func));
@@ -418,14 +391,6 @@ void compute_approx_delta(GridParameters gp, double* delta_func, const double* f
     SAFE_CUDA(cudaFree(d_gp_x_h_step));
     SAFE_CUDA(cudaFree(d_gp_y_h_step));
     SAFE_CUDA(cudaFree(d_gp_is_not_border));
-
-	// for (i=1; i<gp.get_num_x_points()-1; i++) {
- //    	for (j=1; j<gp.get_num_y_points()-1; j++) {
- //    		printf("rank=%d delta_func=%f gpu_delta_func=%f\n", gp.rank, delta_func[i*gp.get_num_y_points()+j], gpu_delta_func[i*gp.get_num_y_points()+j]);
-	// 	}
-	// }
-
-
 
 	if (gp.send_message_top == NULL)
 		gp.send_message_top = new double [gp.get_num_y_points()];
@@ -593,19 +558,6 @@ __global__ void gpu_compute_r(const double *delta_p, double *gp_x_grid, double *
 }
 
 void compute_r(GridParameters gp, double *r, const double *delta_p) {
-	// int i, j;
-
-	// for (i=0; i<gp.get_num_x_points(); i++) {
- //    	for (j=0; j<gp.get_num_y_points(); j++) {
- //    		int grid_i, grid_j;
- //    		gp.get_real_grid_index(i, j, grid_i, grid_j);
- //    		if (gp.is_border_point(grid_i, grid_j))
-	// 			r[i*gp.get_num_y_points()+j] = 0.0;
- //    		else 
- //    			r[i*gp.get_num_y_points()+j] = delta_p[i*gp.get_num_y_points()+j] - F(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
- //    	}
-	// }
-
 	int size = gp.get_num_x_points() * gp.get_num_y_points() * sizeof(double);
     int numElements = gp.get_num_x_points() * gp.get_num_y_points();
 
@@ -626,7 +578,6 @@ void compute_r(GridParameters gp, double *r, const double *delta_p) {
     int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
     gpu_compute_r<<<blocksPerGrid, threadsPerBlock>>>(d_delta_p, d_gp_x_grid, d_gp_y_grid, d_gp_is_not_border, d_r, numElements); CUDA_CHECK_ERROR;
 
-    //double *gpu_r = new double [gp.get_num_x_points() * gp.get_num_y_points()];
     SAFE_CUDA(cudaMemcpy(r, d_r, size, cudaMemcpyDeviceToHost));
 
     SAFE_CUDA(cudaFree(d_r));
@@ -634,13 +585,6 @@ void compute_r(GridParameters gp, double *r, const double *delta_p) {
     SAFE_CUDA(cudaFree(d_gp_x_grid));
     SAFE_CUDA(cudaFree(d_gp_y_grid));
     SAFE_CUDA(cudaFree(d_gp_is_not_border));
-
-	// for (i=0; i<gp.get_num_x_points(); i++) {
- //    	for (j=0; j<gp.get_num_y_points(); j++) {
- //    		printf("rank=%d r=%f gpu_r=%f\n", gp.rank, r[i*gp.get_num_y_points()+j], gpu_r[i*gp.get_num_y_points()+j]);
-	// 	}
-	// }
-
 }
 
 __global__ void gpu_compute_g(double *g, double *r, double alpha, int numElements) {
@@ -666,26 +610,10 @@ void compute_g(GridParameters gp, double *g, double *r, double alpha) {
     int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
     gpu_compute_g<<<blocksPerGrid, threadsPerBlock>>>(d_g, d_r, alpha, numElements); CUDA_CHECK_ERROR;
 
-    //double *gpu_g = new double [gp.get_num_x_points() * gp.get_num_y_points()];
     SAFE_CUDA(cudaMemcpy(g, d_g, size, cudaMemcpyDeviceToHost));
 
     SAFE_CUDA(cudaFree(d_g));
     SAFE_CUDA(cudaFree(d_r));
-
- //    int i, j;
-	// for (i=0; i<gp.get_num_x_points(); i++) {
- //    	for (j=0; j<gp.get_num_y_points(); j++) {
- //    		int grid_i, grid_j;
- //    		gp.get_real_grid_index(i, j, grid_i, grid_j);
- //    		g[i*gp.get_num_y_points()+j] = r[i*gp.get_num_y_points()+j] - alpha * g[i*gp.get_num_y_points()+j];
- //    	}
-	// }
-
- //    for (i=0; i<gp.get_num_x_points(); i++) {
- //    	for (j=0; j<gp.get_num_y_points(); j++) {
- //    		printf("rank=%d g=%f gpu_g=%f\n", gp.rank, g[i*gp.get_num_y_points()+j], gpu_g[i*gp.get_num_y_points()+j]);
-	// 	}
-	// }
 }
 
 __global__ void gpu_compute_p(double *p, double *p_prev, double *g, double tau, int numElements) {
@@ -698,16 +626,6 @@ __global__ void gpu_compute_p(double *p, double *p_prev, double *g, double tau, 
 
 
 void compute_p(GridParameters gp, double *p, double* p_prev, double *g, double tau) {
-	// int i, j;
-
-	// for (i=0; i<gp.get_num_x_points(); i++) {
- //    	for (j=0; j<gp.get_num_y_points(); j++) {
- //    		int grid_i, grid_j;
- //    		gp.get_real_grid_index(i, j, grid_i, grid_j);
- //    		p[i*gp.get_num_y_points()+j] = p_prev[i*gp.get_num_y_points()+j] - tau * g[i*gp.get_num_y_points()+j];
- //    	}
-	// }
-
 	int size = gp.get_num_x_points() * gp.get_num_y_points() * sizeof(double);
     int numElements = gp.get_num_x_points() * gp.get_num_y_points();
 
@@ -723,18 +641,11 @@ void compute_p(GridParameters gp, double *p, double* p_prev, double *g, double t
     int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
     gpu_compute_p<<<blocksPerGrid, threadsPerBlock>>>(d_p, d_p_prev, d_g,  tau, numElements); CUDA_CHECK_ERROR;
 
-    //double *gpu_p = new double [gp.get_num_x_points() * gp.get_num_y_points()];
     SAFE_CUDA(cudaMemcpy(p, d_p, size, cudaMemcpyDeviceToHost));
 
     SAFE_CUDA(cudaFree(d_p));
     SAFE_CUDA(cudaFree(d_p_prev));
     SAFE_CUDA(cudaFree(d_g));
-
- //    for (i=0; i<gp.get_num_x_points(); i++) {
- //    	for (j=0; j<gp.get_num_y_points(); j++) {
- //    		printf("rank=%d p=%f gpu_p=%f\n", gp.rank, p[i*gp.get_num_y_points()+j], gpu_p[i*gp.get_num_y_points()+j]);
-	// 	}
-	// }
 }
 
 __global__ void gpu_norm(double *p, double *p_prev, double *results, int n) {
@@ -744,7 +655,7 @@ __global__ void gpu_norm(double *p, double *p_prev, double *results, int n) {
 	// load input into __shared__ memory
 	double x = 0.0;
 	if(i < n)
-		x = abs(p[i]-p_prev[i]);//input[i];
+		x = abs(p[i]-p_prev[i]);
 
 	sdata[tx] = x;
 	__syncthreads(); 
@@ -793,17 +704,6 @@ __global__ void gpu_reduce_max(double *input, double *results, int n) {
 }
 
 double compute_norm(GridParameters gp, double *p, double *p_prev) {
-	// double norm = 0.0;
-
-	// int i, j;
-	// for (i=0; i<gp.get_num_x_points(); i++) {
- //    	for (j=0; j<gp.get_num_y_points(); j++) {
- //    		int grid_i, grid_j;
- //    		gp.get_real_grid_index(i, j, grid_i, grid_j);
- //    		norm = max(norm, abs(p[i*gp.get_num_y_points()+j] - p_prev[i*gp.get_num_y_points()+j]));
- //    	}
-	// }
-
 	int size = gp.get_num_x_points() * gp.get_num_y_points() * sizeof(double);
     int numElements = gp.get_num_x_points() * gp.get_num_y_points();
 
@@ -832,34 +732,6 @@ double compute_norm(GridParameters gp, double *p, double *p_prev) {
     SAFE_CUDA(cudaFree(d_p));
     SAFE_CUDA(cudaFree(d_p_prev));
     SAFE_CUDA(cudaFree(d_norm));
-
-	//printf("rank=%d size=%d numElements=%d blocksPerGrid=%d CPU norm=%f GPU norm=%f\n", 
-    //	gp.rank, size, numElements, blocksPerGrid, norm, gpu_norm);
-
-	// int size = gp.get_num_x_points() * gp.get_num_y_points() * sizeof(double);
- //    int numElements = gp.get_num_x_points() * gp.get_num_y_points();
-
-	// double *d_p, *d_p_prev, *d_norm;
- //    SAFE_CUDA(cudaMalloc(&d_p, size));
- //    SAFE_CUDA(cudaMalloc(&d_p_prev, size));
-
- //    SAFE_CUDA(cudaMemcpy(d_p, p, size, cudaMemcpyHostToDevice));
- //    SAFE_CUDA(cudaMemcpy(d_p_prev, p_prev, size, cudaMemcpyHostToDevice));
-
-	// int threadsPerBlock = 256;
- //    int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
-	// SAFE_CUDA(cudaMalloc(&d_norm, blocksPerGrid*sizeof(double)));
- //    //printf("rank=%d CUDA kernel launch with %d blocks of %d threads numElements=%d\n", gp.rank, blocksPerGrid, threadsPerBlock, numElements);
- //    gpu_norm<<<blocksPerGrid, threadsPerBlock, threadsPerBlock * sizeof(double)>>>(d_p, d_p_prev, d_norm, numElements); CUDA_CHECK_ERROR;
-
- //    double gpu_norm = 0.0;
- //    SAFE_CUDA(cudaMemcpy(&gpu_norm, d_norm, sizeof(d_norm), cudaMemcpyDeviceToHost));
-     //printf("rank=%d size=%d numElements=%d blocksPerGrid=%d CPU norm=%f GPU norm=%f\n", 
-     //	gp.rank, size, numElements, blocksPerGrid, norm, gpu_norm);
-
- //    SAFE_CUDA(cudaFree(d_p));
- //    SAFE_CUDA(cudaFree(d_p_prev));
- //    SAFE_CUDA(cudaFree(d_norm));
 
 	double global_norm = 0.0;
 	int status = MPI_Allreduce(&gpu_norm, &global_norm, 1, MPI_DOUBLE, MPI_MAX, gp.comm);
@@ -898,10 +770,6 @@ void init_p_prev(GridParameters gp, double* p_prev) {
 }
 
 
-// module add slurm/2.5.6 
-// module add openmpi/1.8.4-gcc
-// module add cuda/6.5.14
-// sbatch -p gputest -n 16 --ntasks-per-node=2 --time=00:03:00 ompi ./main 1000 1000
 int main (int argc, char** argv) {
 	if (argc != 3)
 		throw std::runtime_error("Incorrect number of arguments");
