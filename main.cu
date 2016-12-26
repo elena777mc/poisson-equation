@@ -60,6 +60,14 @@ double phi(const double x, const double y) {
     return log(t);
 }
 
+__device__ double gpu_F(const double x, const double y) {
+    return (x*x + y*y) / ((1.0 + 1.0*x*y)*(1.0 + 1.0*x*y));
+}
+
+__device__ double gpu_phi(const double x, const double y) {
+    return logf(1.0 + 1.0 * x*y);
+}
+
 double f_grid(const double t) {
 	double q = 1.5;
 	if (t < 0 || t > 1)
@@ -108,7 +116,7 @@ struct GridParameters {
 	double *x_grid, *y_grid;
 	double eps;
     bool top, bottom, left, right;
-    double *hxhy;
+    double *hxhy, *gp_x_grid, *gp_y_grid, *gp_is_not_border;
 
     double *send_message_top, *send_message_bottom, *send_message_left, *send_message_right;
     double *recv_message_top, *recv_message_bottom, *recv_message_left, *recv_message_right;
@@ -160,6 +168,23 @@ struct GridParameters {
 	        			hxhy[i*get_num_y_points()+j] = 0.0;
 	        	}
 	        }
+
+	        gp_x_grid = new double [get_num_x_points() * get_num_y_points()];
+			gp_y_grid = new double [get_num_x_points() * get_num_y_points()];
+			gp_is_not_border = new double [get_num_x_points() * get_num_y_points()];
+
+			for (int i=0; i<get_num_x_points(); i++) {
+		    	for (int j=0; j<get_num_y_points(); j++) {
+		    		int grid_i, grid_j;
+		    		get_real_grid_index(i, j, grid_i, grid_j);
+		    		gp_x_grid[i*get_num_y_points()+j] = get_x_grid_value(grid_i);
+		    		gp_y_grid[i*get_num_y_points()+j] = get_y_grid_value(grid_j);
+		    		if (is_border_point(grid_i, grid_j))
+						gp_is_not_border[i*get_num_y_points()+j] = 0.0;
+					else
+						gp_is_not_border[i*get_num_y_points()+j] = 1.0;
+		    	}
+			}
 		}
 
 	int get_num_x_points() {
@@ -599,43 +624,156 @@ void compute_approx_delta(GridParameters gp, double* delta_func, const double* f
 	}
 }
 
-void compute_r(GridParameters gp, double *r, const double *delta_p) {
-	int i, j;
+__global__ void gpu_compute_r(const double *delta_p, double *gp_x_grid, double *gp_y_grid, double* gp_is_not_border, double* r, int numElements) {
+  int no_thread = threadIdx.x + blockDim.x * blockIdx.x;
 
-	for (i=0; i<gp.get_num_x_points(); i++) {
-    	for (j=0; j<gp.get_num_y_points(); j++) {
-    		int grid_i, grid_j;
-    		gp.get_real_grid_index(i, j, grid_i, grid_j);
-    		if (gp.is_border_point(grid_i, grid_j))
-				r[i*gp.get_num_y_points()+j] = 0.0;
-    		else 
-    			r[i*gp.get_num_y_points()+j] = delta_p[i*gp.get_num_y_points()+j] - F(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
-    	}
-	}
+  if (no_thread < numElements) {
+  	r[no_thread] = (delta_p[no_thread] - gpu_F(gp_x_grid[no_thread], gp_y_grid[no_thread])) * gp_is_not_border[no_thread];
+  }
+}
+
+void compute_r(GridParameters gp, double *r, const double *delta_p) {
+	// int i, j;
+
+	// for (i=0; i<gp.get_num_x_points(); i++) {
+ //    	for (j=0; j<gp.get_num_y_points(); j++) {
+ //    		int grid_i, grid_j;
+ //    		gp.get_real_grid_index(i, j, grid_i, grid_j);
+ //    		if (gp.is_border_point(grid_i, grid_j))
+	// 			r[i*gp.get_num_y_points()+j] = 0.0;
+ //    		else 
+ //    			r[i*gp.get_num_y_points()+j] = delta_p[i*gp.get_num_y_points()+j] - F(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
+ //    	}
+	// }
+
+	int size = gp.get_num_x_points() * gp.get_num_y_points() * sizeof(double);
+    int numElements = gp.get_num_x_points() * gp.get_num_y_points();
+
+	double *d_r, *d_delta_p, *d_gp_x_grid, *d_gp_y_grid, *d_gp_is_not_border;
+	SAFE_CUDA(cudaMalloc(&d_r, size));
+	SAFE_CUDA(cudaMalloc(&d_delta_p, size));
+	SAFE_CUDA(cudaMalloc(&d_gp_x_grid, size));
+	SAFE_CUDA(cudaMalloc(&d_gp_y_grid, size));
+	SAFE_CUDA(cudaMalloc(&d_gp_is_not_border, size));
+
+	SAFE_CUDA(cudaMemcpy(d_r, r, size, cudaMemcpyHostToDevice));
+	SAFE_CUDA(cudaMemcpy(d_delta_p, delta_p, size, cudaMemcpyHostToDevice));
+	SAFE_CUDA(cudaMemcpy(d_gp_x_grid, gp.gp_x_grid, size, cudaMemcpyHostToDevice));
+	SAFE_CUDA(cudaMemcpy(d_gp_y_grid, gp.gp_y_grid, size, cudaMemcpyHostToDevice));
+	SAFE_CUDA(cudaMemcpy(d_gp_is_not_border, gp.gp_is_not_border, size, cudaMemcpyHostToDevice));
+
+	int threadsPerBlock = 256;
+    int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
+    gpu_compute_r<<<blocksPerGrid, threadsPerBlock>>>(d_delta_p, d_gp_x_grid, d_gp_y_grid, d_gp_is_not_border, d_r, numElements); CUDA_CHECK_ERROR;
+
+    //double *gpu_r = new double [gp.get_num_x_points() * gp.get_num_y_points()];
+    SAFE_CUDA(cudaMemcpy(r, d_r, size, cudaMemcpyDeviceToHost));
+
+    SAFE_CUDA(cudaFree(d_r));
+    SAFE_CUDA(cudaFree(d_delta_p));
+    SAFE_CUDA(cudaFree(d_gp_x_grid));
+    SAFE_CUDA(cudaFree(d_gp_y_grid));
+
+	// for (i=0; i<gp.get_num_x_points(); i++) {
+ //    	for (j=0; j<gp.get_num_y_points(); j++) {
+ //    		printf("rank=%d r=%f gpu_r=%f\n", gp.rank, r[i*gp.get_num_y_points()+j], gpu_r[i*gp.get_num_y_points()+j]);
+	// 	}
+	// }
+
+}
+
+__global__ void gpu_compute_g(double *g, double *r, double alpha, int numElements) {
+  int no_thread = threadIdx.x + blockDim.x * blockIdx.x;
+
+  if (no_thread < numElements) {
+  	g[no_thread] = r[no_thread] - alpha * g[no_thread];
+  }
 }
 
 void compute_g(GridParameters gp, double *g, double *r, double alpha) {
-	int i, j;
+	int size = gp.get_num_x_points() * gp.get_num_y_points() * sizeof(double);
+    int numElements = gp.get_num_x_points() * gp.get_num_y_points();
 
-	for (i=0; i<gp.get_num_x_points(); i++) {
-    	for (j=0; j<gp.get_num_y_points(); j++) {
-    		int grid_i, grid_j;
-    		gp.get_real_grid_index(i, j, grid_i, grid_j);
-    		g[i*gp.get_num_y_points()+j] = r[i*gp.get_num_y_points()+j] - alpha * g[i*gp.get_num_y_points()+j];
-    	}
-	}
+	double *d_g, *d_r;
+	SAFE_CUDA(cudaMalloc(&d_g, size));
+	SAFE_CUDA(cudaMalloc(&d_r, size));
+
+	SAFE_CUDA(cudaMemcpy(d_g, g, size, cudaMemcpyHostToDevice));
+	SAFE_CUDA(cudaMemcpy(d_r, r, size, cudaMemcpyHostToDevice));
+
+	int threadsPerBlock = 256;
+    int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
+    gpu_compute_g<<<blocksPerGrid, threadsPerBlock>>>(d_g, d_r, alpha, numElements); CUDA_CHECK_ERROR;
+
+    //double *gpu_g = new double [gp.get_num_x_points() * gp.get_num_y_points()];
+    SAFE_CUDA(cudaMemcpy(g, d_g, size, cudaMemcpyDeviceToHost));
+
+    SAFE_CUDA(cudaFree(d_g));
+    SAFE_CUDA(cudaFree(d_r));
+
+ //    int i, j;
+	// for (i=0; i<gp.get_num_x_points(); i++) {
+ //    	for (j=0; j<gp.get_num_y_points(); j++) {
+ //    		int grid_i, grid_j;
+ //    		gp.get_real_grid_index(i, j, grid_i, grid_j);
+ //    		g[i*gp.get_num_y_points()+j] = r[i*gp.get_num_y_points()+j] - alpha * g[i*gp.get_num_y_points()+j];
+ //    	}
+	// }
+
+ //    for (i=0; i<gp.get_num_x_points(); i++) {
+ //    	for (j=0; j<gp.get_num_y_points(); j++) {
+ //    		printf("rank=%d g=%f gpu_g=%f\n", gp.rank, g[i*gp.get_num_y_points()+j], gpu_g[i*gp.get_num_y_points()+j]);
+	// 	}
+	// }
 }
 
-void compute_p(GridParameters gp, double *p, double* p_prev, double *g, double tau) {
-	int i, j;
+__global__ void gpu_compute_p(double *p, double *p_prev, double *g, double tau, int numElements) {
+  int no_thread = threadIdx.x + blockDim.x * blockIdx.x;
 
-	for (i=0; i<gp.get_num_x_points(); i++) {
-    	for (j=0; j<gp.get_num_y_points(); j++) {
-    		int grid_i, grid_j;
-    		gp.get_real_grid_index(i, j, grid_i, grid_j);
-    		p[i*gp.get_num_y_points()+j] = p_prev[i*gp.get_num_y_points()+j] - tau * g[i*gp.get_num_y_points()+j];
-    	}
-	}
+  if (no_thread < numElements) {
+  	p[no_thread] = p_prev[no_thread] - tau * g[no_thread];
+  }
+}
+
+
+void compute_p(GridParameters gp, double *p, double* p_prev, double *g, double tau) {
+	// int i, j;
+
+	// for (i=0; i<gp.get_num_x_points(); i++) {
+ //    	for (j=0; j<gp.get_num_y_points(); j++) {
+ //    		int grid_i, grid_j;
+ //    		gp.get_real_grid_index(i, j, grid_i, grid_j);
+ //    		p[i*gp.get_num_y_points()+j] = p_prev[i*gp.get_num_y_points()+j] - tau * g[i*gp.get_num_y_points()+j];
+ //    	}
+	// }
+
+	int size = gp.get_num_x_points() * gp.get_num_y_points() * sizeof(double);
+    int numElements = gp.get_num_x_points() * gp.get_num_y_points();
+
+	double *d_p, *d_p_prev, *d_g;
+	SAFE_CUDA(cudaMalloc(&d_p, size));
+	SAFE_CUDA(cudaMalloc(&d_p_prev, size));
+	SAFE_CUDA(cudaMalloc(&d_g, size));
+
+	SAFE_CUDA(cudaMemcpy(d_p_prev, p_prev, size, cudaMemcpyHostToDevice));
+	SAFE_CUDA(cudaMemcpy(d_g, g, size, cudaMemcpyHostToDevice));
+
+	int threadsPerBlock = 256;
+    int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
+    gpu_compute_p<<<blocksPerGrid, threadsPerBlock>>>(d_p, d_p_prev, d_g,  tau, numElements); CUDA_CHECK_ERROR;
+
+    //double *gpu_p = new double [gp.get_num_x_points() * gp.get_num_y_points()];
+    SAFE_CUDA(cudaMemcpy(p, d_p, size, cudaMemcpyDeviceToHost));
+
+    SAFE_CUDA(cudaFree(d_p));
+    SAFE_CUDA(cudaFree(d_p_prev));
+    SAFE_CUDA(cudaFree(d_g));
+
+ //    for (i=0; i<gp.get_num_x_points(); i++) {
+ //    	for (j=0; j<gp.get_num_y_points(); j++) {
+ //    		printf("rank=%d p=%f gpu_p=%f\n", gp.rank, p[i*gp.get_num_y_points()+j], gpu_p[i*gp.get_num_y_points()+j]);
+	// 	}
+	// }
 }
 
 
