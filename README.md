@@ -15,6 +15,6 @@
 # run on lomonosov
  - ssh elena777mc_1854@lomonosov.parallel.ru
  - module add slurm/2.5.6 
- - module add openmpi/1.8.4-gcc 
- - sbatch -p gputest -n 16 --ntasks-per-node=2 --time=00:03:00 ompi ./main 1000 1000
+ - module add openmpi/1.8.4-gcc
+ - sbatch -p gputest -n 16 --ntasks-per-node=2 --time=00:15:00 ompi ./main 1000 1000
  - squeue | grep elena (check task execution)
