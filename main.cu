@@ -26,26 +26,12 @@ using namespace std;
         throw std::runtime_error(cudaGetErrorString(cudaGetLastError())); \
     }
 
-double F(const double x, const double y) {
-    double t = 1.0 + 1.0*x*y;
-    if (t == 0)
-    	throw std::runtime_error("Error in computing 'F' function");
-    return (x*x + y*y)/(t*t);
-}
-
-double phi(const double x, const double y) {
-    double t = 1.0 + 1.0 * x*y;
-    if (t <= 0)
-        throw std::runtime_error("Error in computing 'phi' function");
-    return log(t);
-}
-
 __device__ double gpu_F(const double x, const double y) {
     return (x*x + y*y) / ((1.0 + 1.0*x*y)*(1.0 + 1.0*x*y));
 }
 
 __device__ double gpu_phi(const double x, const double y) {
-    return logf(1.0 + x*y);
+    return logf(1.0 + 1.0*x*y);
 }
 
 double f_grid(const double t) {
@@ -117,7 +103,7 @@ struct GridParameters {
 		top (false), bottom (false), left (false), right (false) {
             send_requests = new MPI_Request [4];
             recv_requests = new MPI_Request [4];
-            cuda_streams = new cudaStream_t [4];
+            //cuda_streams = new cudaStream_t [4];
 
 			int step1, step2;
 			step1 = int(floor(1.0 * N1 / p1));
@@ -205,24 +191,14 @@ struct GridParameters {
 			SAFE_CUDA(cudaMemcpy(gp_is_local_border, l_gp_is_local_border, size * sizeof(bool), cudaMemcpyHostToDevice));
 			SAFE_CUDA(cudaMemcpy(gp_x_h_step, l_gp_x_h_step, size * sizeof(double), cudaMemcpyHostToDevice));
 			SAFE_CUDA(cudaMemcpy(gp_y_h_step, l_gp_y_h_step, size * sizeof(double), cudaMemcpyHostToDevice));
-
-			if (p1 * p2 == 16) {
-			    threadsPerBlock = 512;
-			}
-			else if (p1 * p2 == 8) {
-			    threadsPerBlock = 64;
-			}
-			else if (p1 * p2 == 1) {
-                threadsPerBlock = 512;
-			}
-			else
-			    threadsPerBlock = 128;
+			
+			threadsPerBlock = 128;
 			numElements = get_num_x_points() * get_num_y_points();
-			blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
+			blocksPerGrid = 1.0 * (numElements + threadsPerBlock - 1) / threadsPerBlock;
             // need for compute scalar product
             SAFE_CUDA(cudaMalloc(&product_buf, (blocksPerGrid+1)*sizeof(double)));
             // need for compute norm
-            SAFE_CUDA(cudaMalloc(&norm_buf, size * sizeof(double)));
+            SAFE_CUDA(cudaMalloc(&norm_buf, (blocksPerGrid+1)*sizeof(double)));
 		}
 
 	int get_num_x_points() {
@@ -312,48 +288,21 @@ __global__ void gpu_scalar_product(double *f1, double *f2, double* hxhy, double 
 }
 
 
-__global__ void gpu_reduce_sum(double *input, double *results, int n) {
-	extern __shared__ double sdata[];
-	int i = blockIdx.x*blockDim.x + threadIdx.x;
-	int tx = threadIdx.x;
-	// load input into __shared__ memory
-	double x = 0.0;
-	if(i < n)
-		x = input[i];
-
-	sdata[tx] = x;
-	__syncthreads(); 
-	// block-wide reduction in __shared__ mem
-	for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
-		if(tx < offset) {
-			// add a partial sum upstream to our own
-			sdata[tx] += sdata[tx + offset];
-		}
-		__syncthreads();
-	}
-	// finally, thread 0 writes the result
-	if(threadIdx.x == 0) {
-		// note that the result is per-block
-		// not per-thread
-		results[blockIdx.x] = sdata[0];
-	}
-}
-
-
-double scalar_product(GridParameters gp, double* f1, double* f2) {
+double scalar_product(GridParameters gp, double* f1, double* f2) {	
     // reduce per-block partial sums
     gpu_scalar_product<<<gp.blocksPerGrid, gp.threadsPerBlock, gp.threadsPerBlock * sizeof(double)>>>(f1, f2, gp.hxhy, gp.product_buf, gp.numElements); CUDA_CHECK_ERROR;
 
-    // reduce partial sums to a total sum
-    gpu_reduce_sum<<<1, gp.threadsPerBlock, gp.threadsPerBlock * sizeof(double)>>>(gp.product_buf, gp.product_buf+gp.blocksPerGrid, gp.blocksPerGrid); CUDA_CHECK_ERROR;
-
-    double gpu_product = 0.0;
-    SAFE_CUDA(cudaMemcpy(&gpu_product, gp.product_buf+gp.blocksPerGrid, sizeof(double), cudaMemcpyDeviceToHost));
+	// reduce partial sums to a total sum
+    double *tmp_product_buf = new double [gp.blocksPerGrid];
+	SAFE_CUDA(cudaMemcpy(tmp_product_buf, gp.product_buf, gp.blocksPerGrid * sizeof(double), cudaMemcpyDeviceToHost));
+	double gpu_product = 0.0;
+	for (int i=0; i<gp.blocksPerGrid; i++)
+		gpu_product += tmp_product_buf[i];
 
     double global_product = 0.0;
     int status = MPI_Allreduce(&gpu_product, &global_product, 1, MPI_DOUBLE, MPI_SUM, gp.comm);
     if (status != MPI_SUCCESS) throw std::runtime_error("Error in compute scalar_product!");
-    //printf("rank %d: product=%f global_product=%f\n", gp.rank, product, global_product);
+    //printf("rank %d: global_product=%f gpu_product=%f gpu_product_old=%f\n", gp.rank, global_product, gpu_product, gpu_product_old);
     return global_product;
 }
 
@@ -370,15 +319,14 @@ __global__ void gpu_copy_send_message(double* send_buffer, const double* func, i
 }
 
 
-__device__ double gpu_compute_delta(double *func, double f_top, double f_bottom, double f_left,
-                                  double f_right, double* gp_x_h_step, double* gp_y_h_step, int no_thread) {
-    double h_i_1 = gp_x_h_step[no_thread-1];
+__device__ double gpu_compute_delta(double f_curr, double f_top, double f_bottom, double f_left,
+                                  double f_right, double* gp_x_h_step, double* gp_y_h_step, int no_thread, int num_y_points) {
+    double h_i_1 = gp_x_h_step[no_thread-num_y_points];
     double h_i = gp_x_h_step[no_thread];
     double h_j_1 = gp_y_h_step[no_thread-1];
     double h_j = gp_y_h_step[no_thread];
     double average_hx = (h_i + h_i_1) / 2.0;
     double average_hy = (h_j + h_j_1) / 2.0;
-    double f_curr = func[no_thread];
 
     return (1.0 / average_hx) * ((f_curr - f_top) / h_i_1 - (f_bottom - f_curr) / h_i) +
             (1.0 / average_hy) * ((f_curr - f_left) / h_j_1 - (f_right - f_curr) / h_j);
@@ -391,53 +339,55 @@ __global__ void gpu_compute_approx_delta(double *delta_func, double *func, doubl
 	    double *recv_message_top, double *recv_message_bottom, double *recv_message_left, double *recv_message_right)
 {
 	int no_thread = threadIdx.x + blockDim.x * blockIdx.x;
+	double f_top, f_bottom, f_left, f_right, f_curr;
 
 	if ((no_thread < numElements) && (is_global_border[no_thread] == false)) {
 	    if (is_local_border[no_thread] == true) {
-            double f_top = func[no_thread-num_y_points];
-            double f_bottom = func[no_thread+num_y_points];
-            double f_left = func[no_thread-1];
-            double f_right = func[no_thread+1];
+            f_top = func[no_thread-num_y_points];
+            f_bottom = func[no_thread+num_y_points];
+            f_left = func[no_thread-1];
+            f_right = func[no_thread+1];
+            f_curr = func[no_thread];
 
 	        // border points (except corner)
             if ((not top) && (0 < no_thread) && (no_thread < num_y_points - 1))
-                delta_func[no_thread] = gpu_compute_delta(func, recv_message_top[no_thread], f_bottom, f_left, f_right, x_h_step, x_h_step, no_thread);
+                delta_func[no_thread] = gpu_compute_delta(f_curr, recv_message_top[no_thread], f_bottom, f_left, f_right, x_h_step, x_h_step, no_thread, num_y_points);
             if ((not bottom) && (no_thread > (num_x_points-1)*num_y_points + 1) && (no_thread < num_x_points*num_y_points - 1)) {
                 int index = no_thread - (num_x_points-1)*num_y_points;
-                delta_func[no_thread] = gpu_compute_delta(func, f_top, recv_message_bottom[index], f_left, f_right, x_h_step, x_h_step, no_thread);
+                delta_func[no_thread] = gpu_compute_delta(f_curr, f_top, recv_message_bottom[index], f_left, f_right, x_h_step, x_h_step, no_thread, num_y_points);
             }
             if ((not left) && (no_thread % num_y_points == 0) && (no_thread != 0) && (no_thread != ((num_x_points - 1)*num_y_points))) {
                 int index = no_thread % num_y_points;
-                delta_func[no_thread] = gpu_compute_delta(func, f_top, f_bottom, recv_message_left[index], f_right, x_h_step, x_h_step, no_thread);
+                delta_func[no_thread] = gpu_compute_delta(f_curr, f_top, f_bottom, recv_message_left[index], f_right, x_h_step, x_h_step, no_thread, num_y_points);
             }
             if ((not right) && ((no_thread + 1) % num_y_points == 0) && (no_thread != num_y_points - 1) && (no_thread != num_x_points*num_y_points - 1)) {
                 int index = (no_thread + 1) % num_y_points;
-                delta_func[no_thread] = gpu_compute_delta(func, f_top, f_bottom, f_left, recv_message_right[index], x_h_step, x_h_step, no_thread);
+                delta_func[no_thread] = gpu_compute_delta(f_curr, f_top, f_bottom, f_left, recv_message_right[index], x_h_step, x_h_step, no_thread, num_y_points);
             }
 
             // corner points
             if ((not top) && (not left) && ((no_thread == 0))) {
-                delta_func[no_thread] = gpu_compute_delta(func, recv_message_top[no_thread], f_bottom, recv_message_left[no_thread], f_right, x_h_step, x_h_step, no_thread);
+                delta_func[no_thread] = gpu_compute_delta(f_curr, recv_message_top[no_thread], f_bottom, recv_message_left[no_thread], f_right, x_h_step, x_h_step, no_thread, num_y_points);
             }
             if ((not top) && (not right) && ((no_thread == num_y_points - 1))) {
                 int index1 = no_thread;
                 int index2 = (no_thread + 1) % num_y_points;;
-                delta_func[no_thread] = gpu_compute_delta(func, recv_message_top[index1], f_bottom, f_left, recv_message_right[index2], x_h_step, x_h_step, no_thread);
+                delta_func[no_thread] = gpu_compute_delta(f_curr, recv_message_top[index1], f_bottom, f_left, recv_message_right[index2], x_h_step, x_h_step, no_thread, num_y_points);
             }
             if ((not bottom) && (not left) && (no_thread == (num_x_points - 1)*num_y_points)) {
                 int index1 = no_thread - (num_x_points-1)*num_y_points;
                 int index2 = no_thread % num_y_points;
-                delta_func[no_thread] = gpu_compute_delta(func, f_top, recv_message_bottom[index1], recv_message_left[index2], f_right, x_h_step, x_h_step, no_thread);
+                delta_func[no_thread] = gpu_compute_delta(f_curr, f_top, recv_message_bottom[index1], recv_message_left[index2], f_right, x_h_step, x_h_step, no_thread, num_y_points);
             }
             if ((not bottom) && (not right) && (no_thread == (num_x_points*num_y_points - 1))) {
                 int index = no_thread - (num_x_points-1)*num_y_points;;
-                delta_func[no_thread] = gpu_compute_delta(func, f_top, recv_message_bottom[index], f_left, recv_message_right[index], x_h_step, x_h_step, no_thread);
+                delta_func[no_thread] = gpu_compute_delta(f_curr, f_top, recv_message_bottom[index], f_left, recv_message_right[index], x_h_step, x_h_step, no_thread, num_y_points);
             }
 	    }
 	    else {
 	        // inner points
-	        delta_func[no_thread] = gpu_compute_delta(func, func[no_thread-num_y_points], func[no_thread+num_y_points],
-	               func[no_thread-1], func[no_thread+1], x_h_step, x_h_step, no_thread);
+	        delta_func[no_thread] = gpu_compute_delta(func[no_thread], func[no_thread-num_y_points], func[no_thread+num_y_points],
+	               func[no_thread-1], func[no_thread+1], x_h_step, y_h_step, no_thread, num_y_points);
 	    }
     }
 }
@@ -462,40 +412,46 @@ void compute_approx_delta(GridParameters gp, double* delta_func, double* func) {
         SAFE_CUDA(cudaHostAlloc(&gp.recv_message_left, gp.get_num_x_points() * sizeof(double), cudaHostAllocMapped));
     if (gp.recv_message_right == NULL)
         SAFE_CUDA(cudaHostAlloc(&gp.recv_message_right, gp.get_num_x_points() * sizeof(double), cudaHostAllocMapped));
-
-    // copy data to send from gpu to host
-    SAFE_CUDA(cudaMemcpyAsync(gp.send_message_top, func, gp.get_num_y_points() * sizeof(double),
-            cudaMemcpyDeviceToHost, gp.cuda_streams[0]));
-    SAFE_CUDA(cudaMemcpyAsync(gp.send_message_bottom, func + (gp.get_num_x_points()-1)*gp.get_num_y_points(),
-            gp.get_num_y_points() * sizeof(double), cudaMemcpyDeviceToHost, gp.cuda_streams[1]));
-    gpu_copy_send_message<<<gp.get_num_x_points(), 1, 0, gp.cuda_streams[2]>>>(gp.send_message_left, func, gp.get_num_y_points(), gp.numElements); CUDA_CHECK_ERROR;
-    gpu_copy_send_message<<<gp.get_num_x_points(), 1, 0, gp.cuda_streams[3]>>>(gp.send_message_right, func + gp.get_num_y_points() - 1, gp.get_num_y_points(), gp.numElements); CUDA_CHECK_ERROR;
-
+	
+	// copy data to send from gpu to host
+	SAFE_CUDA(cudaMemcpy(gp.send_message_top, func, gp.get_num_y_points() * sizeof(double), cudaMemcpyHostToDevice));
+	SAFE_CUDA(cudaMemcpy(gp.send_message_bottom, func + (gp.get_num_x_points()-1)*gp.get_num_y_points(), 
+		gp.get_num_y_points() * sizeof(double), cudaMemcpyHostToDevice));
+	gpu_copy_send_message<<<gp.get_num_x_points(), 1, 0>>>(gp.send_message_left, func, gp.get_num_y_points(), gp.numElements); CUDA_CHECK_ERROR;
+	gpu_copy_send_message<<<gp.get_num_x_points(), 1, 0>>>(gp.send_message_right, func + gp.get_num_y_points() - 1, gp.get_num_y_points(), gp.numElements); CUDA_CHECK_ERROR;
+	
+    //SAFE_CUDA(cudaMemcpyAsync(gp.send_message_top, func, gp.get_num_y_points() * sizeof(double),
+    //        cudaMemcpyDeviceToHost, gp.cuda_streams[0]));
+    //SAFE_CUDA(cudaMemcpyAsync(gp.send_message_bottom, func + (gp.get_num_x_points()-1)*gp.get_num_y_points(),
+    //        gp.get_num_y_points() * sizeof(double), cudaMemcpyDeviceToHost, gp.cuda_streams[1]));
+    //gpu_copy_send_message<<<gp.get_num_x_points(), 1, 0, gp.cuda_streams[2]>>>(gp.send_message_left, func, gp.get_num_y_points(), gp.numElements); CUDA_CHECK_ERROR;
+    //gpu_copy_send_message<<<gp.get_num_x_points(), 1, 0, gp.cuda_streams[3]>>>(gp.send_message_right, func + gp.get_num_y_points() - 1, gp.get_num_y_points(), gp.numElements); CUDA_CHECK_ERROR;
+	
     int status;
     int send_count=0;
     if (not gp.top) {
-        cudaStreamSynchronize(gp.cuda_streams[0]); CUDA_CHECK_ERROR;
+        //cudaStreamSynchronize(gp.cuda_streams[0]); CUDA_CHECK_ERROR;
         status = MPI_Isend(gp.send_message_top, gp.get_num_y_points(), MPI_DOUBLE,
             gp.get_top_rank(), SendToTop, gp.comm, &(gp.send_requests[send_count]));
         if (status != MPI_SUCCESS) throw std::runtime_error("Error in send message!");
         send_count++;
     }
     if (not gp.bottom) {
-        cudaStreamSynchronize(gp.cuda_streams[1]); CUDA_CHECK_ERROR;
+        //cudaStreamSynchronize(gp.cuda_streams[1]); CUDA_CHECK_ERROR;
         status = MPI_Isend(gp.send_message_bottom, gp.get_num_y_points(), MPI_DOUBLE,
             gp.get_bottom_rank(), SendToBottom, gp.comm, &(gp.send_requests[send_count]));
         if (status != MPI_SUCCESS) throw std::runtime_error("Error in send message!");
         send_count++;
     }
     if (not gp.left) {
-        cudaStreamSynchronize(gp.cuda_streams[2]); CUDA_CHECK_ERROR;
+        //cudaStreamSynchronize(gp.cuda_streams[2]); CUDA_CHECK_ERROR;
         status = MPI_Isend(gp.send_message_left, gp.get_num_x_points(), MPI_DOUBLE,
             gp.get_left_rank(), SendToLeft, gp.comm, &(gp.send_requests[send_count]));
         if (status != MPI_SUCCESS) throw std::runtime_error("Error in send message!");
         send_count++;
     }
     if (not gp.right) {
-        cudaStreamSynchronize(gp.cuda_streams[3]); CUDA_CHECK_ERROR;
+        //cudaStreamSynchronize(gp.cuda_streams[3]); CUDA_CHECK_ERROR;
         status = MPI_Isend(gp.send_message_right, gp.get_num_x_points(), MPI_DOUBLE,
             gp.get_right_rank(), SendToRight, gp.comm, &(gp.send_requests[send_count]));
         if (status != MPI_SUCCESS) throw std::runtime_error("Error in send message!");
@@ -612,50 +568,21 @@ __global__ void gpu_norm(double *p, double *p_prev, double *results, int n) {
 }
 
 
-__global__ void gpu_reduce_max(double *input, double *results, int n) {
-	extern __shared__ double sdata[];
-	int i = blockIdx.x*blockDim.x + threadIdx.x;
-	int tx = threadIdx.x;
-	// load input into __shared__ memory
-	double x = 0.0;
-	if(i < n)
-		x = input[i];
-
-	sdata[tx] = x;
-	__syncthreads(); 
-	// block-wide reduction in __shared__ mem
-	for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
-		if(tx < offset) {
-			// add a partial sum upstream to our own
-			sdata[tx] = max(sdata[tx], sdata[tx + offset]);
-		}
-		__syncthreads();
-	}
-	// finally, thread 0 writes the result
-	if(threadIdx.x == 0) {
-		// note that the result is per-block
-		// not per-thread
-		results[blockIdx.x] = sdata[0];
-	}
-}
-
-
-double compute_norm(GridParameters gp, double *p, double *p_prev) {
+double compute_norm(GridParameters gp, double *p, double *p_prev) {	
     // reduce per-block partial sums
-     gpu_norm<<<gp.blocksPerGrid, gp.threadsPerBlock, gp.threadsPerBlock * sizeof(double)>>>(p, p_prev, gp.norm_buf, gp.numElements); CUDA_CHECK_ERROR;
+    gpu_norm<<<gp.blocksPerGrid, gp.threadsPerBlock, gp.threadsPerBlock * sizeof(double)>>>(p, p_prev, gp.norm_buf, gp.numElements); CUDA_CHECK_ERROR;
 
      // reduce partial sums to a total sum
-     gpu_reduce_max<<<1, gp.threadsPerBlock, gp.threadsPerBlock * sizeof(double)>>>(gp.norm_buf, gp.norm_buf+gp.blocksPerGrid, gp.blocksPerGrid); CUDA_CHECK_ERROR;
-
-     double gpu_norm = 0.0;
-     SAFE_CUDA(cudaMemcpy(&gpu_norm, gp.norm_buf+gp.blocksPerGrid, sizeof(double), cudaMemcpyDeviceToHost));
-     //printf("rank=%d size=%d numElements=%d blocksPerGrid=%d CPU product=%f GPU product=%f\n",
-     //	gp.rank, size, numElements, blocksPerGrid, product, gpu_product);
+	double *tmp_norm_buf = new double [gp.blocksPerGrid];
+	SAFE_CUDA(cudaMemcpy(tmp_norm_buf, gp.norm_buf, gp.blocksPerGrid * sizeof(double), cudaMemcpyDeviceToHost));
+	double gpu_norm = 0.0;
+	for (int i=0; i<gp.blocksPerGrid; i++)
+		gpu_norm = max(gpu_norm, tmp_norm_buf[i]);
 
  	double global_norm = 0.0;
  	int status = MPI_Allreduce(&gpu_norm, &global_norm, 1, MPI_DOUBLE, MPI_MAX, gp.comm);
      if (status != MPI_SUCCESS) throw std::runtime_error("Error in compute scalar_product!");
-     //printf("rank %d: norm=%f global_norm=%f\n", gp.rank, norm, global_norm);
+     //printf("rank %d: gpu_norm=%f global_norm=%f real_norm=%f\n", gp.rank, gpu_norm, global_norm, real_norm);
      return global_norm;
 }
 
@@ -688,6 +615,15 @@ __global__ void gpu_init_p_prev(double *p_prev, double *x_grid, double *y_grid, 
 
 void init_p_prev(GridParameters gp, double* p_prev) {
     gpu_init_p_prev<<<gp.blocksPerGrid, gp.threadsPerBlock>>>(p_prev, gp.gp_x_grid, gp.gp_y_grid, gp.gp_is_global_border, gp.numElements); CUDA_CHECK_ERROR;
+}
+
+
+__global__ void gpu_phi_on_grid(double *phi_on_grid, double *x_grid, double *y_grid, int numElements) {
+  int no_thread = threadIdx.x + blockDim.x * blockIdx.x;
+
+  if (no_thread < numElements) {
+	  phi_on_grid[no_thread] = gpu_phi(x_grid[no_thread], y_grid[no_thread]);
+  }
 }
 
 
@@ -735,7 +671,16 @@ int main (int argc, char** argv) {
 	    GridParameters gp(rank, MPI_COMM_WORLD, x_grid, y_grid, N1, N2, p1, p2, eps);
 	   	//printf("rank %d: x_index_from = %d  x_index_to = %d  y_index_from = %d y_index_to = %d  top=%d bottom=%d left=%d right=%d\n", 
 	    //	gp.rank, gp.x_index_from, gp.x_index_to, gp.y_index_from, gp.y_index_to, gp.top, gp.bottom, gp.left, gp.right);
-
+		if (rank == 0) {
+			printf("threadsPerBlock=%d  blocksPerGrid=%d  numElements=%d\n", gp.threadsPerBlock, gp.blocksPerGrid, gp.numElements);
+			int device = 0;
+			struct cudaDeviceProp properties;
+			cudaGetDeviceProperties(&properties, device);
+			printf("maxGridSize=%d\n",properties.maxGridSize[0]);
+            printf("maxThreadsDim=%d\n",properties.maxThreadsDim[0]);
+            printf("maxThreadsPerBlock=%d\n",properties.maxThreadsPerBlock);
+		}
+		
 	    // allocate gpu memory
 	    int size = gp.get_num_x_points() * gp.get_num_y_points();
 	    double *p, *p_prev, *g, *r, *delta_p, *delta_r, *delta_g;
@@ -761,48 +706,41 @@ int main (int argc, char** argv) {
 	    double tau = 0.0;
 
         // compute phi (needed for check result)
-	    double* l_phi_on_grid = new double [gp.get_num_x_points() * gp.get_num_y_points()];
-	    for (int i=0; i<gp.get_num_x_points(); i++) {
-	    	for (int j=0; j<gp.get_num_y_points(); j++) {
-	    		int grid_i, grid_j;
-	    		gp.get_real_grid_index(i, j, grid_i, grid_j);
-	    		l_phi_on_grid[i*gp.get_num_y_points()+j] = phi(gp.get_x_grid_value(grid_i), gp.get_y_grid_value(grid_j));
-	    	}
-		}
-		double* phi_on_grid;
-		SAFE_CUDA(cudaMalloc(&phi_on_grid, size * sizeof(double)));
-		SAFE_CUDA(cudaMemcpy(phi_on_grid, l_phi_on_grid, size * sizeof(double), cudaMemcpyHostToDevice));
+        double* phi_on_grid;
+        SAFE_CUDA(cudaMalloc(&phi_on_grid, size * sizeof(double)));
+        gpu_phi_on_grid<<<gp.blocksPerGrid, gp.threadsPerBlock>>>(phi_on_grid, gp.gp_x_grid, gp.gp_y_grid, gp.numElements); CUDA_CHECK_ERROR;
 
 	    int n_iter = 1;
 	    while (true) {
-	    	compute_approx_delta(gp, delta_p, p_prev);
-	    	compute_r(gp, r, delta_p);
+	    	compute_approx_delta(gp, delta_p, p_prev); CUDA_CHECK_ERROR;
+	    	compute_r(gp, r, delta_p);  CUDA_CHECK_ERROR;
 
 	    	if (n_iter > 1) {
-	    		compute_approx_delta(gp, delta_r, r);
-	    		scalar_product_delta_r_and_g = scalar_product(gp, delta_r, g);
+	    		compute_approx_delta(gp, delta_r, r);  CUDA_CHECK_ERROR;
+	    		scalar_product_delta_r_and_g = scalar_product(gp, delta_r, g);  CUDA_CHECK_ERROR;
 	    		alpha = 1.0 * scalar_product_delta_r_and_g / scalar_product_delta_g_and_g;
 	    	}
 
-	    	if (n_iter > 1) 
-	    		compute_g(gp, g, r, alpha);
+	    	if (n_iter > 1) { 
+	    		compute_g(gp, g, r, alpha);  CUDA_CHECK_ERROR;
+			}
 	    	else 
             	swap(g, r);
 
-            compute_approx_delta(gp, delta_g, g);
+            compute_approx_delta(gp, delta_g, g);  CUDA_CHECK_ERROR;
             if (n_iter > 1) {
-            	scalar_product_r_and_g = scalar_product(gp, r, g);
+            	scalar_product_r_and_g = scalar_product(gp, r, g);  CUDA_CHECK_ERROR;
             }
             else {
-            	scalar_product_r_and_g = scalar_product(gp, g, g);
+            	scalar_product_r_and_g = scalar_product(gp, g, g);  CUDA_CHECK_ERROR;
             }
 
-            scalar_product_delta_g_and_g = scalar_product(gp, delta_g, g);
+            scalar_product_delta_g_and_g = scalar_product(gp, delta_g, g);  CUDA_CHECK_ERROR;
 	        tau = 1.0 * scalar_product_r_and_g / scalar_product_delta_g_and_g;
 
 	       	compute_p(gp, p, p_prev, g, tau);
-	       	double norm_p_p_prev = compute_norm(gp, p, p_prev);
-	       	double norm_p_phi = compute_norm(gp, p, phi_on_grid);
+	       	double norm_p_p_prev = compute_norm(gp, p, p_prev);  CUDA_CHECK_ERROR;
+	       	double norm_p_phi = compute_norm(gp, p, phi_on_grid);  CUDA_CHECK_ERROR;
 	       	if (rank == 0)
 	       		printf("# iteration %d: norm_p_p_prev=%f norm_p_phi=%f\n", n_iter, norm_p_p_prev, norm_p_phi);
 	       	if (norm_p_p_prev < gp.eps)
@@ -814,6 +752,22 @@ int main (int argc, char** argv) {
 
 	    // free gpu memory
         SAFE_CUDA(cudaFree(phi_on_grid));
+		SAFE_CUDA(cudaFree(p));
+	    SAFE_CUDA(cudaFree(p_prev));
+	    SAFE_CUDA(cudaFree(g));
+	    SAFE_CUDA(cudaFree(r));
+	    SAFE_CUDA(cudaFree(delta_p));
+	    SAFE_CUDA(cudaFree(delta_r));
+	    SAFE_CUDA(cudaFree(delta_g));
+	    
+		SAFE_CUDA(cudaFree(gp.gp_x_grid));
+		SAFE_CUDA(cudaFree(gp.gp_y_grid));
+		SAFE_CUDA(cudaFree(gp.gp_is_global_border));
+		SAFE_CUDA(cudaFree(gp.gp_is_local_border));
+		SAFE_CUDA(cudaFree(gp.gp_x_h_step));
+		SAFE_CUDA(cudaFree(gp.gp_y_h_step));
+		SAFE_CUDA(cudaFree(gp.product_buf));
+		SAFE_CUDA(cudaFree(gp.norm_buf));
 	}
 	MPI_Finalize();
 
