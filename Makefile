@@ -9,7 +9,7 @@ APP = $(PROJ)
 all: $(APP)
 
 $(APP): $(HDRS) $(SRCS) $(CUSRCS)
-	$(CC) $(SRCS) $(CUSRCS) -o $(APP)
+	$(CC) $(SRCS) $(CUSRCS) -o $(APP) -O3
 
 clean:
 	rm -f *.o $(APP)
